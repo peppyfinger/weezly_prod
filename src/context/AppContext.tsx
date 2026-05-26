@@ -32,7 +32,7 @@ export interface Order {
   total: number;
   currency: Currency;
   date: string;
-  status: 'processing' | 'shipped' | 'delivered';
+  status: 'processing' | 'shipped' | 'delivered' | 'paid';
   address: Record<string, string>;
 }
 
@@ -57,6 +57,11 @@ export interface Toast {
 export interface User {
   name: string;
   email: string;
+  phone?: string;
+  address?: string;
+  city?: string;
+  zipCode?: string;
+  country?: string;
 }
 
 export interface AppState {
@@ -66,6 +71,7 @@ export interface AppState {
   products: Product[];
   reviews: Review[];
   cart: CartItem[];
+  favorites: number[];
   priceAlerts: PriceAlert[];
   orders: Order[];
   mailbox: MailMessage[];
@@ -76,6 +82,8 @@ export interface AppState {
   authModalOpen: boolean;
   adminModalOpen: boolean;
   mailboxOpen: boolean;
+  profileOpen: boolean;
+  favoritesOpen: boolean;
   user: User | null;
   isAdmin: boolean;
   unreadMail: number;
@@ -88,6 +96,7 @@ type Action =
   | { type: 'LOGIN_USER'; payload: User }
   | { type: 'LOGIN_ADMIN' }
   | { type: 'LOGOUT' }
+  | { type: 'UPDATE_USER'; payload: Partial<User> }
   | { type: 'ADD_TO_CART'; payload: { product: Product; warrantyLevel?: WarrantyLevel } }
   | { type: 'REMOVE_FROM_CART'; payload: number }
   | { type: 'UPDATE_CART_QUANTITY'; payload: { productId: number; quantity: number } }
@@ -99,6 +108,8 @@ type Action =
   | { type: 'SET_AUTH_MODAL_OPEN'; payload: boolean }
   | { type: 'SET_ADMIN_MODAL_OPEN'; payload: boolean }
   | { type: 'SET_MAILBOX_OPEN'; payload: boolean }
+  | { type: 'SET_PROFILE_OPEN'; payload: boolean }
+  | { type: 'SET_FAVORITES_OPEN'; payload: boolean }
   | { type: 'ADD_PRICE_ALERT'; payload: PriceAlert }
   | { type: 'REMOVE_PRICE_ALERT'; payload: number }
   | { type: 'UPDATE_PRODUCT_PRICE'; payload: { productId: number; newPrice: number; discount: number } }
@@ -111,15 +122,85 @@ type Action =
   | { type: 'MARK_MAIL_READ'; payload: string }
   | { type: 'ADD_TOAST'; payload: Toast }
   | { type: 'REMOVE_TOAST'; payload: string }
-  | { type: 'TRIGGER_ALERT'; payload: number };
+  | { type: 'TRIGGER_ALERT'; payload: number }
+  | { type: 'TOGGLE_FAVORITE'; payload: number }
+  | { type: 'LOAD_STATE'; payload: Partial<AppState> };
+
+// localStorage keys
+const STORAGE_KEY = 'weezly_state';
+const PRODUCTS_KEY = 'weezly_products';
+
+// Get initial products with reset reviews
+const getInitialProducts = (): Product[] => {
+  const stored = localStorage.getItem(PRODUCTS_KEY);
+  if (stored) {
+    try {
+      return JSON.parse(stored);
+    } catch {
+      // Fall through to reset
+    }
+  }
+  // Return products with empty reviews (rating 0, count 0)
+  return initialProducts.map(p => ({ ...p, rating: 0, reviewCount: 0 }));
+};
+
+const loadFromStorage = (): Partial<AppState> => {
+  try {
+    const stored = localStorage.getItem(STORAGE_KEY);
+    if (stored) {
+      const parsed = JSON.parse(stored);
+      return {
+        theme: parsed.theme || 'dark',
+        language: parsed.language || 'ru',
+        currency: parsed.currency || 'BYN',
+        user: parsed.user || null,
+        isAdmin: parsed.isAdmin || false,
+        cart: parsed.cart || [],
+        favorites: parsed.favorites || [],
+        priceAlerts: parsed.priceAlerts || [],
+        orders: parsed.orders || [],
+        reviews: parsed.reviews || [],
+        mailbox: parsed.mailbox || [],
+        unreadMail: parsed.unreadMail || 0,
+      };
+    }
+  } catch (e) {
+    console.error('Failed to load state from storage:', e);
+  }
+  return {};
+};
+
+const saveToStorage = (state: AppState) => {
+  try {
+    const toSave = {
+      theme: state.theme,
+      language: state.language,
+      currency: state.currency,
+      user: state.user,
+      isAdmin: state.isAdmin,
+      cart: state.cart,
+      favorites: state.favorites,
+      priceAlerts: state.priceAlerts,
+      orders: state.orders,
+      reviews: state.reviews,
+      mailbox: state.mailbox,
+      unreadMail: state.unreadMail,
+    };
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(toSave));
+    localStorage.setItem(PRODUCTS_KEY, JSON.stringify(state.products));
+  } catch (e) {
+    console.error('Failed to save state to storage:', e);
+  }
+};
 
 const initialState: AppState = {
   theme: 'dark',
   language: 'ru',
   currency: 'BYN',
-  products: initialProducts,
+  products: getInitialProducts(),
   reviews: [],
   cart: [],
+  favorites: [],
   priceAlerts: [],
   orders: [],
   mailbox: [],
@@ -130,6 +211,8 @@ const initialState: AppState = {
   authModalOpen: false,
   adminModalOpen: false,
   mailboxOpen: false,
+  profileOpen: false,
+  favoritesOpen: false,
   user: null,
   isAdmin: false,
   unreadMail: 0,
@@ -137,12 +220,15 @@ const initialState: AppState = {
 
 function reducer(state: AppState, action: Action): AppState {
   switch (action.type) {
+    case 'LOAD_STATE':
+      return { ...state, ...action.payload };
     case 'SET_THEME': return { ...state, theme: action.payload };
     case 'SET_LANGUAGE': return { ...state, language: action.payload };
     case 'SET_CURRENCY': return { ...state, currency: action.payload };
     case 'LOGIN_USER': return { ...state, user: action.payload, isAdmin: false, authModalOpen: false };
     case 'LOGIN_ADMIN': return { ...state, isAdmin: true, adminModalOpen: false, user: { name: 'Admin', email: 'admin@weezly.com' } };
-    case 'LOGOUT': return { ...state, user: null, isAdmin: false, cart: [], priceAlerts: [] };
+    case 'LOGOUT': return { ...state, user: null, isAdmin: false, cart: [], priceAlerts: [], favorites: [] };
+    case 'UPDATE_USER': return { ...state, user: state.user ? { ...state.user, ...action.payload } : null };
     case 'ADD_TO_CART': {
       const { product, warrantyLevel = 'none' } = action.payload;
       const existing = state.cart.find(i => i.product.id === product.id);
@@ -183,6 +269,8 @@ function reducer(state: AppState, action: Action): AppState {
     case 'SET_AUTH_MODAL_OPEN': return { ...state, authModalOpen: action.payload };
     case 'SET_ADMIN_MODAL_OPEN': return { ...state, adminModalOpen: action.payload };
     case 'SET_MAILBOX_OPEN': return { ...state, mailboxOpen: action.payload };
+    case 'SET_PROFILE_OPEN': return { ...state, profileOpen: action.payload };
+    case 'SET_FAVORITES_OPEN': return { ...state, favoritesOpen: action.payload };
     case 'ADD_PRICE_ALERT':
       return {
         ...state,
@@ -255,6 +343,16 @@ function reducer(state: AppState, action: Action): AppState {
           a.productId === action.payload ? { ...a, triggered: true } : a
         ),
       };
+    case 'TOGGLE_FAVORITE': {
+      const productId = action.payload;
+      const isFavorite = state.favorites.includes(productId);
+      return {
+        ...state,
+        favorites: isFavorite
+          ? state.favorites.filter(id => id !== productId)
+          : [...state.favorites, productId],
+      };
+    }
     default:
       return state;
   }
@@ -275,6 +373,19 @@ const AppContext = createContext<AppContextType | null>(null);
 
 export function AppProvider({ children }: { children: React.ReactNode }) {
   const [state, dispatch] = useReducer(reducer, initialState);
+
+  // Load state from localStorage on mount
+  useEffect(() => {
+    const savedState = loadFromStorage();
+    if (Object.keys(savedState).length > 0) {
+      dispatch({ type: 'LOAD_STATE', payload: savedState });
+    }
+  }, []);
+
+  // Save state to localStorage on changes
+  useEffect(() => {
+    saveToStorage(state);
+  }, [state.theme, state.language, state.currency, state.user, state.isAdmin, state.cart, state.favorites, state.priceAlerts, state.orders, state.reviews, state.mailbox, state.unreadMail, state.products]);
 
   const t = useCallback((key: keyof typeof translations.en): string => {
     return (translations[state.language] as Record<string, string>)[key] ?? translations.en[key] ?? key;
@@ -327,7 +438,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
             type: 'ADD_TOAST',
             payload: {
               id: toastId,
-              title: '🔔 ' + (state.language === 'ru' ? 'Цена снизилась!' : state.language === 'be' ? 'Цана знізілася!' : 'Price Dropped!'),
+              title: state.language === 'ru' ? 'Цена снизилась!' : state.language === 'be' ? 'Цана знізілася!' : 'Price Dropped!',
               message: `${product.nameRu} — ${state.currency === 'USD' ? `$${newPrice.toFixed(2)}` : `${(newPrice * USD_TO_BYN).toFixed(2)} BYN`}`,
               type: 'success',
               productId: product.id,
@@ -350,7 +461,6 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
             },
           });
 
-          // Send real email via backend if user is logged in
           const userRef = currentUserRef.current;
           if (userRef?.email) {
             sendEmail({

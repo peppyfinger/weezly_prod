@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from 'react';
 import {
   Search, ShoppingCart, Sun, Moon, Globe, ChevronDown,
-  User, Shield, Settings, Mail, Zap, LogOut, LogIn, UserPlus
+  User, Shield, Settings, Mail, Zap, LogOut, LogIn, UserPlus, Heart
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { Language, Currency } from '../data/translations';
@@ -154,15 +154,33 @@ export default function Header({ onAdminClick, onMailboxClick, searchQuery, setS
               </button>
             )}
 
+            {/* Favorites - only for logged in users */}
+            {state.user && (
+              <button
+                onClick={() => dispatch({ type: 'SET_FAVORITES_OPEN', payload: true })}
+                className={`relative p-2 rounded-xl transition-all duration-200 ${hoverBg} ${textColor} border ${isDark ? 'border-slate-700' : 'border-slate-200'}`}
+              >
+                <Heart size={16} />
+                {state.favorites.length > 0 && (
+                  <span className="absolute -top-1 -right-1 w-4 h-4 bg-red-500 rounded-full text-white text-[10px] flex items-center justify-center font-bold">
+                    {state.favorites.length}
+                  </span>
+                )}
+              </button>
+            )}
+
             {/* Auth buttons */}
             {state.user ? (
               <div className="flex items-center gap-2">
-                <div className={`flex items-center gap-2 px-3 py-2 rounded-xl border ${isDark ? 'border-slate-700' : 'border-slate-200'}`}>
+                <button
+                  onClick={() => dispatch({ type: 'SET_PROFILE_OPEN', payload: true })}
+                  className={`flex items-center gap-2 px-3 py-2 rounded-xl border transition-all duration-200 ${isDark ? 'border-slate-700 hover:border-cyan-500' : 'border-slate-200 hover:border-cyan-400'}`}
+                >
                   <div className="w-6 h-6 rounded-full bg-gradient-to-br from-cyan-500 to-blue-600 flex items-center justify-center">
                     <User size={12} className="text-white" />
                   </div>
                   <span className={`text-sm font-medium ${textColor} hidden sm:block`}>{state.user.name}</span>
-                </div>
+                </button>
                 <button
                   onClick={() => dispatch({ type: 'LOGOUT' })}
                   className={`p-2 rounded-xl transition-all duration-200 ${hoverBg} ${textColor} border ${isDark ? 'border-slate-700' : 'border-slate-200'}`}

@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { X, Star, ShoppingCart, Bell, BellOff, Zap, Shield, Check } from 'lucide-react';
+import { X, Star, ShoppingCart, Bell, BellOff, Zap, Shield, Check, Heart, ShoppingCart } from 'lucide-react';
 import { Product, getWarrantyPrice, WarrantyLevel } from '../data/products';
 import { useApp } from '../context/AppContext';
 import Reviews from './Reviews';
@@ -19,6 +19,7 @@ export default function ProductDetail({ product, onClose }: ProductDetailProps) 
   if (!product) return null;
 
   const inCart = state.cart.some(i => i.product.id === product.id);
+  const isFavorite = state.favorites.includes(product.id);
   const isTracked = state.priceAlerts.some(a => a.productId === product.id);
 
   const lang = state.language;
@@ -78,9 +79,23 @@ export default function ProductDetail({ product, onClose }: ProductDetailProps) 
             <span className={`text-xs ${subText}`}>·</span>
             <span className={`text-xs ${subText}`}>{t(product.category as any)}</span>
           </div>
-          <button onClick={onClose} className={`p-2 rounded-xl transition-all duration-200 ${isDark ? 'hover:bg-slate-800 text-slate-400' : 'hover:bg-slate-100 text-slate-500'}`}>
-            <X size={18} />
-          </button>
+          <div className="flex items-center gap-2">
+            {state.user && (
+              <button
+                onClick={() => dispatch({ type: 'TOGGLE_FAVORITE', payload: product.id })}
+                className={`p-2 rounded-xl transition-all duration-200 ${
+                  isFavorite
+                    ? 'bg-red-500/20 text-red-400'
+                    : isDark ? 'hover:bg-slate-800 text-slate-400 hover:text-red-400' : 'hover:bg-slate-100 text-slate-500 hover:text-red-400'
+                }`}
+              >
+                <Heart size={18} className={isFavorite ? 'fill-current' : ''} />
+              </button>
+            )}
+            <button onClick={onClose} className={`p-2 rounded-xl transition-all duration-200 ${isDark ? 'hover:bg-slate-800 text-slate-400' : 'hover:bg-slate-100 text-slate-500'}`}>
+              <X size={18} />
+            </button>
+          </div>
         </div>
 
         <div className="p-5 grid grid-cols-1 md:grid-cols-2 gap-6">

@@ -15,6 +15,7 @@ import AdminLoginModal from './components/AdminLoginModal';
 import AuthModal from './components/AuthModal';
 import Notifications from './components/Notifications';
 import Mailbox from './components/Mailbox';
+import UserProfile from './components/UserProfile';
 
 function MainApp() {
   const { state, dispatch, t } = useApp();
@@ -243,6 +244,14 @@ function MainApp() {
       <AdminLoginModal open={state.adminModalOpen && !state.isAdmin} onClose={() => dispatch({ type: 'SET_ADMIN_MODAL_OPEN', payload: false })} />
       <AuthModal open={state.authModalOpen} onClose={() => dispatch({ type: 'SET_AUTH_MODAL_OPEN', payload: false })} />
       <Notifications />
+
+      {/* User Profile */}
+      {state.user && (
+        <UserProfile
+          open={state.profileOpen}
+          onClose={() => dispatch({ type: 'SET_PROFILE_OPEN', payload: false })}
+        />
+      )}
 
       {/* Mailbox */}
       {state.user && (

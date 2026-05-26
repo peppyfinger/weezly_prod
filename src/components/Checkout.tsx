@@ -164,7 +164,7 @@ export default function Checkout({ open, onClose }: CheckoutProps) {
       total: cartTotal,
       currency: state.currency,
       date: new Date().toISOString(),
-      status: 'processing',
+      status: paymentMethod === 'card' ? 'paid' : 'processing',
       address: form,
     };
     dispatch({ type: 'ADD_ORDER', payload: order });

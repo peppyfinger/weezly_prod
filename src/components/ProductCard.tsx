@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { ShoppingCart, Star, Zap, Info, Tag } from 'lucide-react';
+import { ShoppingCart, Star, Zap, Info, Tag, Heart } from 'lucide-react';
 import { Product, calculateSmartScore, WarrantyLevel, getWarrantyPrice } from '../data/products';
 import { useApp } from '../context/AppContext';
 
@@ -13,7 +13,7 @@ export default function ProductCard({ product, onDetails }: ProductCardProps) {
   const [showScoreTooltip, setShowScoreTooltip] = useState(false);
   const [warrantyLevel, setWarrantyLevel] = useState<WarrantyLevel>('none');
   const inCart = state.cart.some(i => i.product.id === product.id);
-  const isTracked = state.priceAlerts.some(a => a.productId === product.id);
+  const isFavorite = state.favorites.includes(product.id);
   const isDark = state.theme === 'dark';
   const score = calculateSmartScore(product);
 
@@ -40,6 +40,11 @@ export default function ProductCard({ product, onDetails }: ProductCardProps) {
     en: `Formula: price×30% + rating×50% + reviews×20%\nPrice (${product.price}$): ${Math.round((1 - Math.min(product.price / 2000, 1)) * 30)}pts\nRating (${product.rating}): ${Math.round(((product.rating - 1) / 4) * 50)}pts\nReviews (${product.reviewCount}): ${Math.round(Math.min(product.reviewCount / 5000, 1) * 20)}pts`,
   };
 
+  const handleToggleFavorite = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    dispatch({ type: 'TOGGLE_FAVORITE', payload: product.id });
+  };
+
   return (
     <div className={`group relative rounded-2xl border backdrop-blur-sm transition-all duration-300 hover:scale-[1.02] hover:shadow-2xl ${isDark ? 'hover:shadow-cyan-500/10' : 'hover:shadow-slate-300/60'} ${cardBg} overflow-hidden`}>
       {/* Discount badge */}
@@ -48,6 +53,20 @@ export default function ProductCard({ product, onDetails }: ProductCardProps) {
           <Tag size={10} />
           -{product.discount}%
         </div>
+      )}
+
+      {/* Favorite button */}
+      {state.user && (
+        <button
+          onClick={handleToggleFavorite}
+          className={`absolute top-3 right-3 z-10 p-2 rounded-full transition-all duration-200 ${
+            isFavorite
+              ? 'bg-red-500/20 text-red-400 hover:bg-red-500/30'
+              : isDark ? 'bg-slate-800/80 text-slate-400 hover:text-red-400 hover:bg-slate-700/80' : 'bg-white/80 text-slate-400 hover:text-red-400 hover:bg-white'
+          }`}
+        >
+          <Heart size={16} className={isFavorite ? 'fill-current' : ''} />
+        </button>
       )}
 
       {/* Image */}
@@ -139,7 +158,7 @@ export default function ProductCard({ product, onDetails }: ProductCardProps) {
               onClick={() => dispatch({ type: 'SET_AUTH_MODAL_OPEN', payload: true })}
               className="flex-1 flex items-center justify-center gap-2 py-2 rounded-xl text-sm font-medium bg-slate-700 text-slate-300 hover:bg-slate-600 transition-all duration-200"
             >
-              {t('login')} →
+              {t('login')}
             </button>
           )}
           <button
