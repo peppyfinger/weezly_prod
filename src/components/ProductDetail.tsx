@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { X, Star, ShoppingCart, Bell, BellOff, Zap, Shield, Check, Heart, ShoppingCart } from 'lucide-react';
+import { X, Star, ShoppingCart, Bell, BellOff, Zap, Shield, Check, Heart } from 'lucide-react';
 import { Product, getWarrantyPrice, WarrantyLevel } from '../data/products';
 import { useApp } from '../context/AppContext';
 import Reviews from './Reviews';
