@@ -124,55 +124,67 @@ SMTP_PASS=your-app-password
 
 ---
 
-## Настройка платежной системы bePaid
+## Настройка платежной системы Stripe
 
-bePaid — белорусская платежная система для приема карт Visa/Mastercard.
+Stripe — международная платежная система для приема карт Visa, Mastercard и других.
 
-### Получение тестовых credentials
+### Получение тестовых ключей
 
-1. **Зарегистрируйтесь в bePaid**
-   - Перейдите на [bepaid.by](https://bepaid.by)
-   - Создайте аккаунт (для тестов можно использовать песочницу)
+1. **Зарегистрируйтесь в Stripe**
+   - Перейдите на [dashboard.stripe.com](https://dashboard.stripe.com/register)
+   - Создайте бесплатный аккаунт
 
-2. **Получите Store ID и Secret Key**
-   - В личном кабинете перейдите в раздел «Настройки» → «Магазины»
+2. **Получите API ключи**
+   - В дашборде перейдите в **Developers** → **API Keys**
    - Скопируйте:
-     - **Store ID** (ID магазина)
-     - **Secret Key** (Секретный ключ)
+     - **Publishable key** (начинается с `pk_test_`)
+     - **Secret key** (начинается с `sk_test_`)
 
 3. **Добавьте в .env**
    ```
-   BEPAID_STORE_ID=your-store-id
-   BEPAID_SECRET_KEY=your-secret-key
-   BEPAID_API_URL=https://checkout.bepaid.by/ctp/api/checkouts
+   STRIPE_PUBLISHABLE_KEY=pk_test_your_publishable_key_here
+   STRIPE_SECRET_KEY=sk_test_your_secret_key_here
    ```
 
-### Тестовые карты для проверки
+### Тестовые карты Stripe
 
 | Номер карты | Результат |
 |-------------|-----------|
 | `4242 4242 4242 4242` | Успешная оплата |
-| `4000 0000 0000 0002` | Отклонено |
+| `4000 0025 0000 3155` | Требует 3D Secure |
+| `4000 0000 0000 0002` | Отклонено (decline) |
 | `4000 0000 0000 9995` | Недостаточно средств |
 
-**CVV:** любой 3-значный
+**CVC:** любой 3-значный код
 **Срок:** любая дата в будущем
+**Почта:** любой email
 
-### Коды валют
+### Валюты и конвертация
 
-bePaid требует числовые коды валют:
-- **BYN** — код `933`
-- **USD** — код `840`
-
-Система автоматически конвертирует выбранные валюты.
+Stripe работает с множеством валют, но не поддерживает BYN.
+- Система автоматически конвертирует BYN в USD по курсу ~0.31
+- USD принимается напрямую без конвертации
 
 ### Как работает оплата
 
 1. Пользователь выбирает товары и переходит к оплате
-2. Система создает checkout в bePaid API
-3. Открывается платежная форма (iframe или redirect)
-4. После успешной оплаты bePaid отправляет webhook
+2. Бэкенд создает PaymentIntent через Stripe API
+3. Фронтенд показывает форму карты (Stripe Elements)
+4. После успешной оплаты Stripe отправляет webhook (опционально)
 5. Заказ переводится в статус «Оплачен»
+
+### Настройка Webhooks (опционально)
+
+Для production рекомендуем настроить webhooks:
+
+1. В Stripe Dashboard → **Developers** → **Webhooks**
+2. Нажмите **Add endpoint**
+3. URL: `https://your-domain.com/api/payments/webhook`
+4. Выберите события: `payment_intent.succeeded`, `payment_intent.payment_failed`
+5. Скопируйте **Signing secret** и добавьте в `.env`:
+   ```
+   STRIPE_WEBHOOK_SECRET=whsec_xxxxx
+   ```
 
 ---
 
@@ -225,7 +237,7 @@ Body: {
 ### Платежи
 
 ```
-POST /api/payments/checkout
+POST /api/payments/create-intent
 Body: {
   amount: number,      // Сумма
   currency: 'BYN' | 'USD',
@@ -234,12 +246,19 @@ Body: {
   description: string,
   language: 'ru' | 'be' | 'en'
 }
+Response: {
+  success: boolean,
+  clientSecret: string,  // Для Stripe.js
+  paymentIntentId: string,
+  amount: number,        // Сумма в центах USD
+  currency: 'usd'
+}
 
-GET /api/payments/status/:orderId
-Response: { success, status, orderId }
+GET /api/payments/status/:paymentIntentId
+Response: { success, status, paymentIntentId, amount, currency }
 
 POST /api/payments/webhook
-Прием уведомлений от bePayd о статусе оплаты
+Прием уведомлений от Stripe о статусе оплаты
 ```
 
 ### Авторизация
@@ -278,8 +297,9 @@ Response: { success, code }
 - BYN / USD автоматическая конвертация
 
 ### Платежи
-- Интеграция с bePaid
+- Интеграция с Stripe
 - Поддержка карт Visa/Mastercard
+- Автоматическая конвертация BYN → USD
 - Автоматические чеки на email
 
 ---
@@ -287,9 +307,10 @@ Response: { success, code }
 ## Безопасность
 
 - SMTP credentials хранятся только в `.env`
-- bePaid Secret Key используется только на сервере
-- JWT токены для аутентификации
+- Stripe Secret Key используется только на сервере
+- Publishable Key безопасен для использования на фронтенде
 - CORS настроен для фронтенда
+- Webhook signature verification для production
 
 ---
 

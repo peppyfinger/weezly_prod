@@ -2,9 +2,14 @@ import express, { Request, Response } from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import nodemailer from 'nodemailer';
-import crypto from 'crypto';
+import Stripe from 'stripe';
 
 dotenv.config();
+
+// Initialize Stripe
+const stripe = new Stripe(process.env.STRIPE_SECRET_KEY || '', {
+  apiVersion: '2024-12-18.acacia',
+});
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -487,134 +492,133 @@ app.post('/api/auth/forgot-password', async (req: Request, res: Response) => {
   }
 });
 
-// bePaid payment integration
-app.post('/api/payments/checkout', async (req: Request, res: Response) => {
+// Currency conversion: BYN to USD (approximate rate)
+const BYN_TO_USD_RATE = 0.31; // 1 BYN ≈ 0.31 USD
+
+// Stripe Payment Intent creation
+app.post('/api/payments/create-intent', async (req: Request, res: Response) => {
   const { amount, currency, orderId, customerEmail, description } = req.body;
 
-  const storeId = process.env.BEPAID_STORE_ID;
-  const secretKey = process.env.BEPAID_SECRET_KEY;
-
-  if (!storeId || !secretKey) {
-    // Return demo response if bePaid not configured
+  if (!process.env.STRIPE_SECRET_KEY || process.env.STRIPE_SECRET_KEY === 'sk_test_your_secret_key_here') {
+    // Return demo response if Stripe not configured
     return res.json({
       success: true,
-      checkoutUrl: null,
-      token: `demo-token-${Date.now()}`,
-      message: 'bePayd not configured, using demo mode',
+      clientSecret: `demo_secret_${Date.now()}`,
+      paymentIntentId: `pi_demo_${Date.now()}`,
+      message: 'Stripe not configured, using demo mode',
     });
-  }
-
-  // Currency code mapping
-  const currencyCode = currency === 'BYN' ? 933 : 840;
-
-  try {
-    // Generate Base64 auth header
-    const auth = Buffer.from(`${storeId}:${secretKey}`).toString('base64');
-
-    const checkoutData = {
-      checkout: {
-        version: 2,
-        test: true, // Always test mode for this integration
-        amount: Math.round(amount * 100), // Convert to cents
-        currency: currencyCode,
-        description: description || `WEEZLY Order ${orderId}`,
-        order_id: orderId,
-        customer: {
-          email: customerEmail,
-        },
-        settings: {
-          language: req.body.language === 'be' ? 'ru' : req.body.language || 'ru',
-          success_url: `${process.env.FRONTEND_URL}/payment/success`,
-          decline_url: `${process.env.FRONTEND_URL}/payment/decline`,
-          cancel_url: `${process.env.FRONTEND_URL}/payment/cancel`,
-        },
-        payment_method: {
-          types: ['card'],
-        },
-      },
-    };
-
-    const response = await fetch(process.env.BEPAID_API_URL || 'https://checkout.bepaid.by/ctp/api/checkouts', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Basic ${auth}`,
-        'Accept': 'application/json',
-      },
-      body: JSON.stringify(checkoutData),
-    });
-
-    const result = await response.json();
-
-    if (response.ok && result.checkout) {
-      res.json({
-        success: true,
-        checkoutUrl: result.checkout.checkout_url,
-        token: result.checkout.token,
-        orderId: result.checkout.order_id,
-      });
-    } else {
-      console.error('bePaid error:', result);
-      res.status(400).json({ error: 'Failed to create payment checkout', details: result });
-    }
-  } catch (error: any) {
-    console.error('Error creating bePaid checkout:', error);
-    res.status(500).json({ error: 'Failed to create payment checkout', details: error.message });
-  }
-});
-
-// Verify bePaid payment status
-app.get('/api/payments/status/:orderId', async (req: Request, res: Response) => {
-  const { orderId } = req.params;
-
-  const storeId = process.env.BEPAID_STORE_ID;
-  const secretKey = process.env.BEPAID_SECRET_KEY;
-
-  if (!storeId || !secretKey) {
-    // Return demo success if bePaid not configured
-    return res.json({ success: true, status: 'successful', orderId });
   }
 
   try {
-    const auth = Buffer.from(`${storeId}:${secretKey}`).toString('base64');
+    // Convert BYN to USD if needed (Stripe doesn't support BYN)
+    let amountInUsd = amount;
+    let stripeCurrency = 'usd';
 
-    // Query bePaid for payment status
-    const response = await fetch(`https://checkout.bepaid.by/ctp/api/checkouts/${orderId}`, {
-      method: 'GET',
-      headers: {
-        'Authorization': `Basic ${auth}`,
-        'Accept': 'application/json',
+    if (currency === 'BYN') {
+      amountInUsd = amount * BYN_TO_USD_RATE;
+    }
+
+    // Stripe requires amount in cents (multiply by 100)
+    const amountInCents = Math.round(amountInUsd * 100);
+
+    // Create PaymentIntent
+    const paymentIntent = await stripe.paymentIntents.create({
+      amount: amountInCents,
+      currency: stripeCurrency,
+      metadata: {
+        orderId,
+        customerEmail,
+        originalAmount: amount.toString(),
+        originalCurrency: currency,
+      },
+      description: description || `WEEZLY Order ${orderId}`,
+      receipt_email: customerEmail,
+      automatic_payment_methods: {
+        enabled: true,
       },
     });
 
-    const result = await response.json();
-
-    if (response.ok && result.checkout) {
-      res.json({
-        success: true,
-        status: result.checkout.status,
-        orderId: result.checkout.order_id,
-        payment: result.checkout.payment,
-      });
-    } else {
-      res.status(400).json({ error: 'Failed to get payment status', details: result });
-    }
+    res.json({
+      success: true,
+      clientSecret: paymentIntent.client_secret,
+      paymentIntentId: paymentIntent.id,
+      amount: amountInCents,
+      currency: stripeCurrency,
+    });
   } catch (error: any) {
-    console.error('Error getting bePaid status:', error);
-    res.status(500).json({ error: 'Failed to get payment status', details: error.message });
+    console.error('Error creating payment intent:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to create payment intent',
+      details: error.message
+    });
   }
 });
 
-// bePaid webhook handler
-app.post('/api/payments/webhook', (req: Request, res: Response) => {
-  console.log('bePaid webhook received:', req.body);
+// Verify payment status
+app.get('/api/payments/status/:paymentIntentId', async (req: Request, res: Response) => {
+  const { paymentIntentId } = req.params;
 
-  // Verify webhook signature (implement signature verification for production)
-  const { checkout } = req.body;
+  if (!process.env.STRIPE_SECRET_KEY || process.env.STRIPE_SECRET_KEY === 'sk_test_your_secret_key_here') {
+    // Return demo success if Stripe not configured
+    return res.json({
+      success: true,
+      status: 'succeeded',
+      paymentIntentId
+    });
+  }
 
-  if (checkout && checkout.status === 'successful') {
-    // Process successful payment
-    console.log(`Payment successful for order: ${checkout.order_id}`);
+  try {
+    const paymentIntent = await stripe.paymentIntents.retrieve(paymentIntentId);
+
+    res.json({
+      success: true,
+      status: paymentIntent.status,
+      paymentIntentId: paymentIntent.id,
+      amount: paymentIntent.amount,
+      currency: paymentIntent.currency,
+    });
+  } catch (error: any) {
+    console.error('Error getting payment status:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to get payment status',
+      details: error.message
+    });
+  }
+});
+
+// Stripe webhook handler for production
+app.post('/api/payments/webhook', express.raw({ type: 'application/json' }), (req: Request, res: Response) => {
+  const sig = req.headers['stripe-signature'] as string;
+  const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
+
+  let event: Stripe.Event;
+
+  try {
+    if (webhookSecret && sig) {
+      event = stripe.webhooks.constructEvent(req.body, sig, webhookSecret);
+    } else {
+      // For demo/testing without webhook secret
+      event = JSON.parse(req.body.toString());
+    }
+  } catch (err: any) {
+    console.error('Webhook signature verification failed:', err.message);
+    return res.status(400).send(`Webhook Error: ${err.message}`);
+  }
+
+  // Handle the event
+  switch (event.type) {
+    case 'payment_intent.succeeded':
+      const paymentIntent = event.data.object as Stripe.PaymentIntent;
+      console.log(`Payment succeeded for order: ${paymentIntent.metadata.orderId}`);
+      break;
+    case 'payment_intent.payment_failed':
+      const failedPayment = event.data.object as Stripe.PaymentIntent;
+      console.log(`Payment failed for order: ${failedPayment.metadata.orderId}`);
+      break;
+    default:
+      console.log(`Unhandled event type: ${event.type}`);
   }
 
   res.status(200).send('OK');

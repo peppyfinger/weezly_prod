@@ -44,34 +44,37 @@ export async function forgotPassword(email: string, language: 'ru' | 'be' | 'en'
   }
 }
 
-export async function createPaymentCheckout(checkout: PaymentCheckout): Promise<{
+export async function createPaymentIntent(checkout: PaymentCheckout): Promise<{
   success: boolean;
-  checkoutUrl?: string;
-  token?: string;
-  orderId?: string;
+  clientSecret?: string;
+  paymentIntentId?: string;
+  amount?: number;
+  currency?: string;
   error?: string;
 }> {
   try {
-    const response = await fetch(`${API_BASE}/payments/checkout`, {
+    const response = await fetch(`${API_BASE}/payments/create-intent`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(checkout),
     });
     return await response.json();
   } catch (error) {
-    console.error('Error creating payment checkout:', error);
+    console.error('Error creating payment intent:', error);
     return { success: false, error: 'Network error' };
   }
 }
 
-export async function getPaymentStatus(orderId: string): Promise<{
+export async function getPaymentStatus(paymentIntentId: string): Promise<{
   success: boolean;
   status?: string;
-  orderId?: string;
+  paymentIntentId?: string;
+  amount?: number;
+  currency?: string;
   error?: string;
 }> {
   try {
-    const response = await fetch(`${API_BASE}/payments/status/${orderId}`);
+    const response = await fetch(`${API_BASE}/payments/status/${paymentIntentId}`);
     return await response.json();
   } catch (error) {
     console.error('Error getting payment status:', error);

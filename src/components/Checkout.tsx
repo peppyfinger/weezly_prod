@@ -1,13 +1,112 @@
-import { useState } from 'react';
-import { X, CreditCard, Banknote, Building2, Check, Package, Loader } from 'lucide-react';
+import { useState, useEffect } from 'react';
+import { X, CreditCard, Banknote, Building2, Check, Package, Loader, Lock } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { getWarrantyPrice, WarrantyLevel } from '../data/products';
 import { Order } from '../context/AppContext';
-import { createPaymentCheckout, sendEmail } from '../api';
+import { createPaymentIntent, sendEmail } from '../api';
+import { loadStripe } from '@stripe/stripe-js';
+import { Elements, CardElement, useStripe, useElements } from '@stripe/react-stripe-js';
 
 interface CheckoutProps {
   open: boolean;
   onClose: () => void;
+}
+
+// Stripe publishable key
+const stripePromise = loadStripe(import.meta.env.VITE_STRIPE_PUBLISHABLE_KEY || '');
+
+function CardPaymentForm({
+  onSuccess,
+  onError,
+  amount,
+  isProcessing,
+  setIsProcessing
+}: {
+  onSuccess: () => void;
+  onError: (msg: string) => void;
+  amount: number;
+  isProcessing: boolean;
+  setIsProcessing: (v: boolean) => void;
+}) {
+  const stripe = useStripe();
+  const elements = useElements();
+  const { state } = useApp();
+  const isDark = state.theme === 'dark';
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+
+    if (!stripe || !elements) {
+      return;
+    }
+
+    setIsProcessing(true);
+    onError('');
+
+    const cardElement = elements.getElement(CardElement);
+    if (!cardElement) {
+      onError('Card element not found');
+      setIsProcessing(false);
+      return;
+    }
+
+    const { error, paymentIntent } = await stripe.confirmCardPayment(amount, {
+      payment_method: {
+        card: cardElement,
+      }
+    });
+
+    if (error) {
+      onError(error.message || 'Payment failed');
+      setIsProcessing(false);
+    } else if (paymentIntent && paymentIntent.status === 'succeeded') {
+      onSuccess();
+    }
+  };
+
+  return (
+    <form onSubmit={handleSubmit} className="space-y-4">
+      <div className={`p-4 rounded-xl border ${isDark ? 'bg-slate-800 border-slate-700' : 'bg-slate-50 border-slate-200'}`}>
+        <CardElement
+          options={{
+            style: {
+              base: {
+                fontSize: '16px',
+                color: isDark ? '#ffffff' : '#1e293b',
+                '::placeholder': {
+                  color: isDark ? '#64748b' : '#94a3b8',
+                },
+              },
+              invalid: {
+                color: '#ef4444',
+              },
+            },
+          }}
+        />
+      </div>
+      <button
+        type="submit"
+        disabled={!stripe || isProcessing}
+        className={`w-full py-3 rounded-xl font-medium transition-all duration-200 flex items-center justify-center gap-2 ${
+          isProcessing || !stripe
+            ? 'bg-slate-600 text-slate-400 cursor-not-allowed'
+            : 'bg-gradient-to-r from-cyan-500 to-blue-600 text-white hover:from-cyan-400 hover:to-blue-500'
+        }`}
+      >
+        {isProcessing ? (
+          <>
+            <Loader size={18} className="animate-spin" />
+            {state.language === 'ru' ? 'Обработка...' : state.language === 'be' ? 'Апрацоўка...' : 'Processing...'}
+          </>
+        ) : (
+          <>
+            <Lock size={18} />
+            {state.language === 'ru' ? 'Оплатить' : state.language === 'be' ? 'Аплаціць' : 'Pay Now'}
+          </>
+        )}
+      </button>
+    </form>
+  );
 }
 
 export default function Checkout({ open, onClose }: CheckoutProps) {
@@ -21,7 +120,8 @@ export default function Checkout({ open, onClose }: CheckoutProps) {
   });
   const [paymentLoading, setPaymentLoading] = useState(false);
   const [paymentError, setPaymentError] = useState('');
-  const [checkoutUrl, setCheckoutUrl] = useState<string | null>(null);
+  const [clientSecret, setClientSecret] = useState<string | null>(null);
+  const [paymentIntentId, setPaymentIntentId] = useState<string | null>(null);
 
   const isDark = state.theme === 'dark';
   const textColor = isDark ? 'text-white' : 'text-slate-900';
@@ -30,18 +130,14 @@ export default function Checkout({ open, onClose }: CheckoutProps) {
   const cardBg = isDark ? 'bg-slate-900' : 'bg-white';
   const divider = isDark ? 'border-slate-700' : 'border-slate-200';
 
-  if (!open) return null;
+  // Create payment intent when moving to payment step
+  useEffect(() => {
+    if (step === 2 && paymentMethod === 'card' && !clientSecret) {
+      const initPayment = async () => {
+        const id = `WZL-${Date.now().toString(36).toUpperCase()}`;
+        setOrderNumber(id);
 
-  const handlePlaceOrder = async () => {
-    setPaymentError('');
-    setPaymentLoading(true);
-
-    const id = `WZL-${Date.now().toString(36).toUpperCase()}`;
-
-    if (paymentMethod === 'card') {
-      // Process payment via bePaid
-      try {
-        const result = await createPaymentCheckout({
+        const result = await createPaymentIntent({
           amount: cartTotal,
           currency: state.currency,
           orderId: id,
@@ -50,39 +146,18 @@ export default function Checkout({ open, onClose }: CheckoutProps) {
           language: state.language,
         });
 
-        if (result.success && result.checkoutUrl) {
-          // Open bePaid checkout in new window or iframe
-          // For demo, we'll simulate successful payment
-          setCheckoutUrl(result.checkoutUrl);
-
-          // Simulate payment success (in production, this would be via webhook)
-          setTimeout(() => {
-            completeOrder(id);
-          }, 2000);
-        } else if (result.token) {
-          // Demo mode - simulate success
-          setTimeout(() => {
-            completeOrder(id);
-          }, 1500);
-        } else {
-          setPaymentError(result.error || 'Payment failed');
-          setPaymentLoading(false);
+        if (result.success && result.clientSecret) {
+          setClientSecret(result.clientSecret);
+          setPaymentIntentId(result.paymentIntentId || null);
         }
-      } catch (err) {
-        console.error('Payment error:', err);
-        // Demo fallback
-        setTimeout(() => {
-          completeOrder(id);
-        }, 1500);
-      }
-    } else {
-      // Cash or online banking - no immediate payment
-      completeOrder(id);
+      };
+      initPayment();
     }
-  };
+  }, [step, paymentMethod, cartTotal, state.currency, state.language, form.email, clientSecret]);
+
+  if (!open) return null;
 
   const completeOrder = (id: string) => {
-    setOrderNumber(id);
     const order: Order = {
       id,
       items: [...state.cart],
@@ -123,9 +198,59 @@ export default function Checkout({ open, onClose }: CheckoutProps) {
     }
   };
 
+  const handlePlaceOrder = async () => {
+    setPaymentError('');
+    setPaymentLoading(true);
+
+    const id = orderNumber || `WZL-${Date.now().toString(36).toUpperCase()}`;
+
+    if (paymentMethod === 'card') {
+      // Payment will be handled by Stripe card form
+      if (!clientSecret) {
+        // Create payment intent if not exists
+        const result = await createPaymentIntent({
+          amount: cartTotal,
+          currency: state.currency,
+          orderId: id,
+          customerEmail: form.email,
+          description: `WEEZLY Order ${id}`,
+          language: state.language,
+        });
+
+        if (result.success && result.clientSecret) {
+          setClientSecret(result.clientSecret);
+          setPaymentIntentId(result.paymentIntentId || null);
+          // Move to actual payment step
+          setStep(2.5);
+        } else {
+          setPaymentError(result.error || 'Failed to initialize payment');
+          setPaymentLoading(false);
+        }
+      } else {
+        // Already have client secret, show card form
+        setStep(2.5);
+      }
+      setPaymentLoading(false);
+    } else {
+      // Cash or online banking - no immediate payment
+      completeOrder(id);
+    }
+  };
+
+  const handleCardPaymentSuccess = () => {
+    completeOrder(orderNumber);
+  };
+
   const steps = [t('step1'), t('step2'), t('step3'), t('step4')];
 
   const inputClass = `w-full px-3 py-2.5 rounded-xl border text-sm transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-cyan-500/50 ${inputBg}`;
+
+  const appearance = {
+    theme: isDark ? 'night' as const : 'stripe' as const,
+    variables: {
+      colorPrimary: '#06b6d4',
+    },
+  };
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm">
@@ -141,7 +266,7 @@ export default function Checkout({ open, onClose }: CheckoutProps) {
         </div>
 
         {/* Steps indicator */}
-        {step < 4 && (
+        {typeof step === 'number' && step < 4 && (
           <div className={`px-5 py-3 border-b ${divider}`}>
             <div className="flex items-center gap-2">
               {steps.slice(0, 3).map((s, i) => (
@@ -210,7 +335,7 @@ export default function Checkout({ open, onClose }: CheckoutProps) {
             <div className="space-y-3 animate-fade-in-up">
               <p className={`text-sm font-medium ${textColor}`}>{t('paymentMethod')}</p>
               {[
-                { value: 'card', icon: <CreditCard size={18} />, label: t('creditCard'), desc: state.language === 'ru' ? 'Оплата картой через bePaid' : state.language === 'be' ? 'Аплата картай праз bePaid' : 'Pay via bePaid' },
+                { value: 'card', icon: <CreditCard size={18} />, label: t('creditCard'), desc: state.language === 'ru' ? 'Оплата картой через Stripe' : state.language === 'be' ? 'Аплата картай праз Stripe' : 'Pay via Stripe (Visa, Mastercard)' },
                 { value: 'cash', icon: <Banknote size={18} />, label: t('cashOnDelivery'), desc: state.language === 'ru' ? 'Оплата при получении' : state.language === 'be' ? 'Аплата пры атрыманні' : 'Pay on delivery' },
                 { value: 'online', icon: <Building2 size={18} />, label: t('onlineBanking'), desc: state.language === 'ru' ? 'Интернет-банкинг' : state.language === 'be' ? 'Інтэрнэт-банкінг' : 'Online banking' },
               ].map(opt => (
@@ -235,18 +360,60 @@ export default function Checkout({ open, onClose }: CheckoutProps) {
               {paymentMethod === 'card' && (
                 <div className={`p-4 rounded-xl ${isDark ? 'bg-slate-800' : 'bg-slate-50'}`}>
                   <p className={`text-xs ${subText} mb-2`}>
-                    {state.language === 'ru' ? 'Тестовые карты bePaid для проверки:' :
-                      state.language === 'be' ? 'Тэставыя карты bePaid для праверкі:' :
-                      'Test bePaid cards for testing:'}
+                    {state.language === 'ru' ? 'Тестовые карты Stripe для проверки:' :
+                      state.language === 'be' ? 'Тэставыя карты Stripe для праверкі:' :
+                      'Test Stripe cards for testing:'}
                   </p>
                   <div className={`text-xs font-mono space-y-1 ${textColor}`}>
-                    <p>4242 4242 4242 4242</p>
+                    <p className="font-semibold">4242 4242 4242 4242</p>
                     <p className={subText}>
-                      {state.language === 'ru' ? 'Любая дата, любой CVV' :
-                        state.language === 'be' ? 'Любая дата, любы CVV' :
-                        'Any date, any CVV'}
+                      {state.language === 'ru' ? 'Любая будущая дата, любой CVC' :
+                        state.language === 'be' ? 'Любая будучая дата, любы CVC' :
+                        'Any future date, any CVC'}
+                    </p>
+                    <p className={`mt-2 ${subText}`}>
+                      {state.language === 'ru' ? 'Также: 4000 0025 0000 3155 (требует подтверждения)' :
+                        state.language === 'be' ? 'Таксама: 4000 0025 0000 3155 (патрабуе пацверджання)' :
+                        'Also: 4000 0025 0000 3155 (requires authentication)'}
                     </p>
                   </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Step 2.5: Card payment form */}
+          {step === 2.5 && paymentMethod === 'card' && clientSecret && (
+            <div className="space-y-4 animate-fade-in-up">
+              <div className={`p-4 rounded-xl border ${isDark ? 'bg-slate-800/50 border-cyan-500/30' : 'bg-cyan-50 border-cyan-200'}`}>
+                <div className="flex items-center gap-2 mb-2">
+                  <Lock size={16} className="text-cyan-500" />
+                  <p className={`text-sm font-medium ${textColor}`}>
+                    {state.language === 'ru' ? 'Безопасная оплата' :
+                      state.language === 'be' ? 'Бяспечная аплата' :
+                      'Secure Payment'}
+                  </p>
+                </div>
+                <p className={`text-xs ${subText}`}>
+                  {state.language === 'ru' ? `К оплате: ${formatPrice(cartTotal)}` :
+                    state.language === 'be' ? `К аплаце: ${formatPrice(cartTotal)}` :
+                    `Amount to pay: ${formatPrice(cartTotal)}`}
+                </p>
+              </div>
+
+              <Elements stripe={stripePromise} options={{ clientSecret, appearance }}>
+                <CardPaymentForm
+                  onSuccess={handleCardPaymentSuccess}
+                  onError={setPaymentError}
+                  amount={clientSecret}
+                  isProcessing={paymentLoading}
+                  setIsProcessing={setPaymentLoading}
+                />
+              </Elements>
+
+              {paymentError && (
+                <div className={`p-3 rounded-xl text-sm ${isDark ? 'bg-red-500/10 border border-red-500/20 text-red-400' : 'bg-red-50 border border-red-200 text-red-600'}`}>
+                  {paymentError}
                 </div>
               )}
             </div>
@@ -311,7 +478,7 @@ export default function Checkout({ open, onClose }: CheckoutProps) {
                   `Order details sent to ${form.email}`}
               </p>
               <button
-                onClick={() => { onClose(); setStep(1); }}
+                onClick={() => { onClose(); setStep(1); setClientSecret(null); }}
                 className="mt-2 px-6 py-3 rounded-xl font-medium bg-gradient-to-r from-cyan-500 to-blue-600 text-white transition-all duration-200 hover:from-cyan-400 hover:to-blue-500"
               >
                 {t('continueShopping')}
@@ -321,18 +488,18 @@ export default function Checkout({ open, onClose }: CheckoutProps) {
         </div>
 
         {/* Footer actions */}
-        {step < 4 && (
+        {step !== 4 && step !== 2.5 && (
           <div className={`flex items-center justify-between p-5 border-t ${divider}`}>
             {step > 1 ? (
-              <button onClick={() => setStep(s => s - 1)} className={`px-4 py-2 rounded-xl text-sm border transition-all duration-200 ${isDark ? 'border-slate-700 text-slate-300 hover:border-slate-500' : 'border-slate-200 text-slate-600 hover:border-slate-400'}`}>
+              <button onClick={() => setStep(s => typeof s === 'number' ? s - 1 : 1)} className={`px-4 py-2 rounded-xl text-sm border transition-all duration-200 ${isDark ? 'border-slate-700 text-slate-300 hover:border-slate-500' : 'border-slate-200 text-slate-600 hover:border-slate-400'}`}>
                 {t('back')}
               </button>
             ) : <div />}
-            {step < 3 ? (
-              <button onClick={() => setStep(s => s + 1)} className="px-6 py-2.5 rounded-xl text-sm font-medium bg-gradient-to-r from-cyan-500 to-blue-600 text-white transition-all duration-200 hover:from-cyan-400 hover:to-blue-500">
+            {typeof step === 'number' && step < 3 ? (
+              <button onClick={() => setStep(s => typeof s === 'number' ? s + 1 : 2)} className="px-6 py-2.5 rounded-xl text-sm font-medium bg-gradient-to-r from-cyan-500 to-blue-600 text-white transition-all duration-200 hover:from-cyan-400 hover:to-blue-500">
                 {t('next')}
               </button>
-            ) : (
+            ) : step === 3 ? (
               <button
                 onClick={handlePlaceOrder}
                 disabled={paymentLoading}
@@ -351,7 +518,16 @@ export default function Checkout({ open, onClose }: CheckoutProps) {
                   t('placeOrder')
                 )}
               </button>
-            )}
+            ) : null}
+          </div>
+        )}
+
+        {/* Back button for card payment */}
+        {step === 2.5 && (
+          <div className={`flex items-center p-5 border-t ${divider}`}>
+            <button onClick={() => setStep(2)} className={`px-4 py-2 rounded-xl text-sm border transition-all duration-200 ${isDark ? 'border-slate-700 text-slate-300 hover:border-slate-500' : 'border-slate-200 text-slate-600 hover:border-slate-400'}`}>
+              {t('back')}
+            </button>
           </div>
         )}
       </div>
