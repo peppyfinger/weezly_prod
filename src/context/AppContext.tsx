@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useReducer, useEffect, useCallback, useRef } from 'react';
 import { Language, Currency, USD_TO_BYN, translations } from '../data/translations';
 import { Product, WarrantyLevel, initialProducts, getWarrantyPrice } from '../data/products';
+import { sendEmail } from '../api';
 
 export type Theme = 'dark' | 'light';
 
@@ -301,8 +302,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   // Price simulator
   const alertsRef = useRef(state.priceAlerts);
   const productsRef = useRef(state.products);
+  const currentUserRef = useRef(state.user);
   alertsRef.current = state.priceAlerts;
   productsRef.current = state.products;
+  currentUserRef.current = state.user;
 
   useEffect(() => {
     const interval = setInterval(() => {
@@ -346,6 +349,24 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
               read: false,
             },
           });
+
+          // Send real email via backend if user is logged in
+          const userRef = currentUserRef.current;
+          if (userRef?.email) {
+            sendEmail({
+              to: userRef.email,
+              type: 'priceDrop',
+              language: state.language,
+              data: {
+                productName: state.language === 'ru' ? product.nameRu : state.language === 'be' ? product.nameBe : product.nameEn,
+                oldPrice: state.currency === 'USD' ? `$${(product.originalPrice || product.price).toFixed(2)}` : `${((product.originalPrice || product.price) * USD_TO_BYN).toFixed(2)} BYN`,
+                newPrice: state.currency === 'USD' ? `$${newPrice.toFixed(2)}` : `${(newPrice * USD_TO_BYN).toFixed(2)} BYN`,
+                discount: discountPct,
+                productUrl: `${window.location.origin}/product/${product.id}`,
+              },
+            }).catch(err => console.error('Failed to send price drop email:', err));
+          }
+
           setTimeout(() => dispatch({ type: 'REMOVE_TOAST', payload: toastId }), 6000);
         }
       });
