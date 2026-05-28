@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { X, User, Mail, Lock, ArrowRight, UserPlus, Key, Loader } from 'lucide-react';
+import { useState, useMemo } from 'react';
+import { X, User, Mail, Lock, ArrowRight, UserPlus, Loader, Check, X as XIcon } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 
 interface AuthModalProps {
@@ -23,6 +23,18 @@ export default function AuthModal({ open, onClose }: AuthModalProps) {
   const inputBg = isDark ? 'bg-slate-800 border-slate-700 text-white placeholder-slate-500' : 'bg-slate-50 border-slate-200 text-slate-900 placeholder-slate-400';
   const cardBg = isDark ? 'bg-slate-900 border-slate-800' : 'bg-white border-slate-200';
 
+  // Password strength checks
+  const passwordChecks = useMemo(() => ({
+    length: password.length >= 8,
+    uppercase: /[A-Z]/.test(password),
+    lowercase: /[a-z]/.test(password),
+    number: /[0-9]/.test(password),
+    special: /[!@#$%^&*()_+\-=\[\]{};':"\\|,.<>\/?]/.test(password),
+  }), [password]);
+
+  const passwordStrength = Object.values(passwordChecks).filter(Boolean).length;
+  const isPasswordValid = Object.values(passwordChecks).every(Boolean);
+
   if (!open) return null;
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -37,8 +49,8 @@ export default function AuthModal({ open, onClose }: AuthModalProps) {
           setLoading(false);
           return;
         }
-        if (password.length < 6) {
-          setError(state.language === 'ru' ? 'Пароль должен быть не менее 6 символов' : state.language === 'be' ? 'Пароль павінен быць не менш за 6 сімвалаў' : 'Password must be at least 6 characters');
+        if (!isPasswordValid) {
+          setError(state.language === 'ru' ? 'Пароль не соответствует требованиям безопасности' : state.language === 'be' ? 'Пароль не адпавядае патрабаваннямі бяспекі' : 'Password does not meet security requirements');
           setLoading(false);
           return;
         }
@@ -80,6 +92,29 @@ export default function AuthModal({ open, onClose }: AuthModalProps) {
   const switchMode = (newMode: 'login' | 'register') => {
     setMode(newMode);
     setError('');
+  };
+
+  const PasswordCheck = ({ valid, text }: { valid: boolean; text: string }) => (
+    <div className={`flex items-center gap-1.5 text-xs ${valid ? 'text-emerald-500' : isDark ? 'text-slate-500' : 'text-slate-400'}`}>
+      {valid ? <Check size={12} /> : <XIcon size={12} />}
+      <span>{text}</span>
+    </div>
+  );
+
+  const getStrengthColor = () => {
+    if (passwordStrength <= 1) return 'bg-red-500';
+    if (passwordStrength <= 2) return 'bg-orange-500';
+    if (passwordStrength <= 3) return 'bg-amber-500';
+    if (passwordStrength <= 4) return 'bg-lime-500';
+    return 'bg-emerald-500';
+  };
+
+  const getStrengthText = () => {
+    if (passwordStrength <= 1) return state.language === 'ru' ? 'Очень слабый' : state.language === 'be' ? 'Вельмі слабы' : 'Very weak';
+    if (passwordStrength <= 2) return state.language === 'ru' ? 'Слабый' : state.language === 'be' ? 'Слабы' : 'Weak';
+    if (passwordStrength <= 3) return state.language === 'ru' ? 'Средний' : state.language === 'be' ? 'Сярэдні' : 'Medium';
+    if (passwordStrength <= 4) return state.language === 'ru' ? 'Хороший' : state.language === 'be' ? 'Добры' : 'Good';
+    return state.language === 'ru' ? 'Надежный' : state.language === 'be' ? 'Надзейны' : 'Strong';
   };
 
   return (
@@ -146,13 +181,32 @@ export default function AuthModal({ open, onClose }: AuthModalProps) {
                 placeholder="••••••••"
                 className={`w-full pl-9 pr-4 py-2.5 rounded-xl border text-sm transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-cyan-500/50 ${inputBg}`}
                 required
-                minLength={6}
               />
             </div>
-            {mode === 'register' && (
-              <p className={`text-xs mt-1 ${subText}`}>
-                {state.language === 'ru' ? 'Минимум 6 символов' : state.language === 'be' ? 'Мінімум 6 сімвалаў' : 'Minimum 6 characters'}
-              </p>
+
+            {/* Password strength indicator */}
+            {mode === 'register' && password.length > 0 && (
+              <div className="mt-2 space-y-2">
+                <div className="flex items-center gap-2">
+                  <div className="flex-1 h-1.5 rounded-full bg-slate-700">
+                    <div
+                      className={`h-full rounded-full transition-all duration-300 ${getStrengthColor()}`}
+                      style={{ width: `${(passwordStrength / 5) * 100}%` }}
+                    />
+                  </div>
+                  <span className={`text-xs font-medium ${passwordStrength === 5 ? 'text-emerald-500' : subText}`}>
+                    {getStrengthText()}
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-2 gap-1">
+                  <PasswordCheck valid={passwordChecks.length} text={state.language === 'ru' ? 'Минимум 8 символов' : state.language === 'be' ? 'Мінімум 8 сімвалаў' : 'At least 8 characters'} />
+                  <PasswordCheck valid={passwordChecks.uppercase} text={state.language === 'ru' ? 'Заглавная буква' : state.language === 'be' ? 'Вялікая літара' : 'Uppercase letter'} />
+                  <PasswordCheck valid={passwordChecks.lowercase} text={state.language === 'ru' ? 'Строчная буква' : state.language === 'be' ? 'Малая літара' : 'Lowercase letter'} />
+                  <PasswordCheck valid={passwordChecks.number} text={state.language === 'ru' ? 'Цифра' : state.language === 'be' ? 'Лічба' : 'Number'} />
+                  <PasswordCheck valid={passwordChecks.special} text={state.language === 'ru' ? 'Спец. символ (!@#$%)' : state.language === 'be' ? 'Спец. сімвал (!@#$%)' : 'Special char (!@#$%)'} />
+                </div>
+              </div>
             )}
           </div>
 
@@ -168,7 +222,6 @@ export default function AuthModal({ open, onClose }: AuthModalProps) {
                   placeholder="••••••••"
                   className={`w-full pl-9 pr-4 py-2.5 rounded-xl border text-sm transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-cyan-500/50 ${inputBg}`}
                   required
-                  minLength={6}
                 />
               </div>
             </div>

@@ -99,8 +99,44 @@ app.post('/api/auth/register', async (req: Request, res: Response) => {
     return res.status(400).json({ error: 'Invalid email format' });
   }
 
-  if (password.length < 6) {
-    return res.status(400).json({ error: 'Password must be at least 6 characters' });
+  // Password strength validation
+  if (password.length < 8) {
+    return res.status(400).json({ error: 'Password must be at least 8 characters long' });
+  }
+
+  if (password.length > 128) {
+    return res.status(400).json({ error: 'Password must be less than 128 characters' });
+  }
+
+  // Check for at least one uppercase letter
+  if (!/[A-Z]/.test(password)) {
+    return res.status(400).json({ error: 'Password must contain at least one uppercase letter' });
+  }
+
+  // Check for at least one lowercase letter
+  if (!/[a-z]/.test(password)) {
+    return res.status(400).json({ error: 'Password must contain at least one lowercase letter' });
+  }
+
+  // Check for at least one digit
+  if (!/[0-9]/.test(password)) {
+    return res.status(400).json({ error: 'Password must contain at least one number' });
+  }
+
+  // Check for at least one special character
+  if (!/[!@#$%^&*()_+\-=\[\]{};':"\\|,.<>\/?]/.test(password)) {
+    return res.status(400).json({ error: 'Password must contain at least one special character (!@#$%^&* etc.)' });
+  }
+
+  // Check for common weak passwords
+  const commonPasswords = ['password', 'password123', '12345678', 'qwerty', 'abc123', 'Password1!'];
+  if (commonPasswords.some(common => password.toLowerCase().includes(common.toLowerCase()))) {
+    return res.status(400).json({ error: 'Password is too common. Please choose a stronger password' });
+  }
+
+  // Check that name doesn't contain only spaces
+  if (name.trim().length < 2) {
+    return res.status(400).json({ error: 'Name must be at least 2 characters' });
   }
 
   try {
