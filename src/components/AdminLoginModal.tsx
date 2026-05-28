@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { X, Shield, Lock, User, AlertCircle } from 'lucide-react';
+import { X, Shield, Lock, User, AlertCircle, Loader } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 
 interface AdminLoginModalProps {
@@ -7,29 +7,29 @@ interface AdminLoginModalProps {
   onClose: () => void;
 }
 
-const ADMIN_USER = 'admin';
-const ADMIN_PASS = 'admin123';
-
 export default function AdminLoginModal({ open, onClose }: AdminLoginModalProps) {
-  const { state, dispatch, t } = useApp();
+  const { state, t, loginAdmin } = useApp();
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
-  const [error, setError] = useState(false);
+  const [error, setError] = useState('');
+  const [loading, setLoading] = useState(false);
 
-  const isDark = true; // Always dark for admin
   const inputCls = 'w-full px-4 py-3 rounded-xl border bg-slate-800 border-slate-700 text-white text-sm placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-cyan-500/50';
 
   if (!open) return null;
 
-  const handleLogin = () => {
-    if (username === ADMIN_USER && password === ADMIN_PASS) {
-      dispatch({ type: 'LOGIN_ADMIN' });
-      setError(false);
+  const handleLogin = async () => {
+    setError('');
+    setLoading(true);
+    const result = await loginAdmin(username, password);
+    if (result.success) {
       setUsername('');
       setPassword('');
+      onClose();
     } else {
-      setError(true);
+      setError(result.error || 'Login failed');
     }
+    setLoading(false);
   };
 
   return (
@@ -89,15 +89,16 @@ export default function AdminLoginModal({ open, onClose }: AdminLoginModalProps)
             {error && (
               <div className="flex items-center gap-2 text-red-400 text-xs">
                 <AlertCircle size={12} />
-                {state.language === 'ru' ? 'Неверный логин или пароль' : state.language === 'be' ? 'Няправільны лагін або пароль' : 'Invalid login or password'}
+                {error}
               </div>
             )}
 
             <button
               onClick={handleLogin}
-              className="w-full py-3 rounded-xl font-medium bg-gradient-to-r from-amber-500 to-orange-600 text-white hover:from-amber-400 hover:to-orange-500 transition-all duration-200"
+              disabled={loading}
+              className="w-full py-3 rounded-xl font-medium bg-gradient-to-r from-amber-500 to-orange-600 text-white hover:from-amber-400 hover:to-orange-500 transition-all duration-200 disabled:opacity-50 flex items-center justify-center gap-2"
             >
-              {t('loginButton')}
+              {loading ? <Loader size={16} className="animate-spin" /> : t('loginButton')}
             </button>
           </div>
         </div>

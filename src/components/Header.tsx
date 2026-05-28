@@ -15,7 +15,7 @@ interface HeaderProps {
 }
 
 export default function Header({ onAdminClick, onMailboxClick, searchQuery, setSearchQuery, onAuthClick }: HeaderProps) {
-  const { state, dispatch, t } = useApp();
+  const { state, dispatch, t, logout } = useApp();
   const [langOpen, setLangOpen] = useState(false);
   const langRef = useRef<HTMLDivElement>(null);
 
@@ -182,7 +182,7 @@ export default function Header({ onAdminClick, onMailboxClick, searchQuery, setS
                   <span className={`text-sm font-medium ${textColor} hidden sm:block`}>{state.user.name}</span>
                 </button>
                 <button
-                  onClick={() => dispatch({ type: 'LOGOUT' })}
+                  onClick={() => logout()}
                   className={`p-2 rounded-xl transition-all duration-200 ${hoverBg} ${textColor} border ${isDark ? 'border-slate-700' : 'border-slate-200'}`}
                   title={t('logout')}
                 >

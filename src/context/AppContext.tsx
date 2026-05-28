@@ -1,29 +1,24 @@
 import React, { createContext, useContext, useReducer, useEffect, useCallback, useRef } from 'react';
 import { Language, Currency, USD_TO_BYN, translations } from '../data/translations';
-import { Product, WarrantyLevel, initialProducts, getWarrantyPrice } from '../data/products';
+import { Product, WarrantyLevel, getWarrantyPrice } from '../data/products';
+import {
+  User, login as apiLogin, register as apiRegister, adminLogin as apiAdminLogin,
+  getCurrentUser, updateProfile as apiUpdateProfile,
+  getProducts, createProduct as apiCreateProduct, updateProduct as apiUpdateProduct, deleteProduct as apiDeleteProduct,
+  getReviews, createReview as apiCreateReview,
+  getFavorites, toggleFavorite as apiToggleFavorite,
+  getOrders, createOrder as apiCreateOrder, updateOrderStatus,
+  getPriceAlerts, createPriceAlert, deletePriceAlert,
+  Product as ApiProduct, Review as ApiReview, Order as ApiOrder
+} from '../api';
 import { sendEmail } from '../api';
 
 export type Theme = 'dark' | 'light';
-
-export interface Review {
-  id: string;
-  productId: number;
-  author: string;
-  rating: number;
-  text: string;
-  date: string;
-}
 
 export interface CartItem {
   product: Product;
   quantity: number;
   warrantyLevel: WarrantyLevel;
-}
-
-export interface PriceAlert {
-  productId: number;
-  targetPrice: number;
-  triggered: boolean;
 }
 
 export interface Order {
@@ -36,16 +31,6 @@ export interface Order {
   address: Record<string, string>;
 }
 
-export interface MailMessage {
-  id: string;
-  subject: string;
-  from: string;
-  body: string;
-  date: string;
-  productId?: number;
-  read: boolean;
-}
-
 export interface Toast {
   id: string;
   title: string;
@@ -54,27 +39,16 @@ export interface Toast {
   productId?: number;
 }
 
-export interface User {
-  name: string;
-  email: string;
-  phone?: string;
-  address?: string;
-  city?: string;
-  zipCode?: string;
-  country?: string;
-}
-
 export interface AppState {
   theme: Theme;
   language: Language;
   currency: Currency;
   products: Product[];
-  reviews: Review[];
+  reviews: Record<number, { productId: number; authorName: string; rating: number; comment: string; createdAt: string }[]>;
   cart: CartItem[];
   favorites: number[];
-  priceAlerts: PriceAlert[];
+  priceAlerts: { productId: number; targetPrice: number; triggered: boolean }[];
   orders: Order[];
-  mailbox: MailMessage[];
   toasts: Toast[];
   cartOpen: boolean;
   assistantOpen: boolean;
@@ -84,19 +58,21 @@ export interface AppState {
   mailboxOpen: boolean;
   profileOpen: boolean;
   favoritesOpen: boolean;
-  user: User | null;
+  user: { id: string; email: string; name: string; role: string; phone?: string; address?: string; city?: string; zip_code?: string; country?: string } | null;
   isAdmin: boolean;
-  unreadMail: number;
+  token: string | null;
+  loading: boolean;
 }
 
 type Action =
   | { type: 'SET_THEME'; payload: Theme }
   | { type: 'SET_LANGUAGE'; payload: Language }
   | { type: 'SET_CURRENCY'; payload: Currency }
-  | { type: 'LOGIN_USER'; payload: User }
-  | { type: 'LOGIN_ADMIN' }
+  | { type: 'LOGIN_USER'; payload: { user: User; token: string } }
+  | { type: 'LOGIN_ADMIN'; payload: { user: User; token: string } }
   | { type: 'LOGOUT' }
   | { type: 'UPDATE_USER'; payload: Partial<User> }
+  | { type: 'SET_TOKEN'; payload: string | null }
   | { type: 'ADD_TO_CART'; payload: { product: Product; warrantyLevel?: WarrantyLevel } }
   | { type: 'REMOVE_FROM_CART'; payload: number }
   | { type: 'UPDATE_CART_QUANTITY'; payload: { productId: number; quantity: number } }
@@ -110,41 +86,47 @@ type Action =
   | { type: 'SET_MAILBOX_OPEN'; payload: boolean }
   | { type: 'SET_PROFILE_OPEN'; payload: boolean }
   | { type: 'SET_FAVORITES_OPEN'; payload: boolean }
-  | { type: 'ADD_PRICE_ALERT'; payload: PriceAlert }
-  | { type: 'REMOVE_PRICE_ALERT'; payload: number }
-  | { type: 'UPDATE_PRODUCT_PRICE'; payload: { productId: number; newPrice: number; discount: number } }
-  | { type: 'UPDATE_PRODUCT'; payload: Product }
-  | { type: 'ADD_PRODUCT'; payload: Product }
-  | { type: 'DELETE_PRODUCT'; payload: number }
+  | { type: 'SET_PRODUCTS'; payload: Product[] }
+  | { type: 'SET_FAVORITES'; payload: number[] }
+  | { type: 'ADD_FAVORITE'; payload: number }
+  | { type: 'REMOVE_FAVORITE'; payload: number }
+  | { type: 'SET_ORDERS'; payload: Order[] }
   | { type: 'ADD_ORDER'; payload: Order }
-  | { type: 'ADD_REVIEW'; payload: Review }
-  | { type: 'ADD_MAIL'; payload: MailMessage }
-  | { type: 'MARK_MAIL_READ'; payload: string }
+  | { type: 'SET_REVIEWS'; payload: { productId: number; reviews: any[] } }
+  | { type: 'SET_PRICE_ALERTS'; payload: { productId: number; targetPrice: number; triggered: boolean }[] }
+  | { type: 'UPDATE_PRODUCT_PRICE'; payload: { productId: number; newPrice: number; discount: number } }
   | { type: 'ADD_TOAST'; payload: Toast }
   | { type: 'REMOVE_TOAST'; payload: string }
-  | { type: 'TRIGGER_ALERT'; payload: number }
-  | { type: 'TOGGLE_FAVORITE'; payload: number }
-  | { type: 'LOAD_STATE'; payload: Partial<AppState> };
+  | { type: 'SET_LOADING'; payload: boolean };
 
-// localStorage keys
 const STORAGE_KEY = 'weezly_state';
-const PRODUCTS_KEY = 'weezly_products';
+const AUTH_KEY = 'weezly_auth';
 
-// Get initial products with reset reviews
-const getInitialProducts = (): Product[] => {
-  const stored = localStorage.getItem(PRODUCTS_KEY);
-  if (stored) {
-    try {
+const loadAuthFromStorage = (): { token: string | null; user: User | null } => {
+  try {
+    const stored = localStorage.getItem(AUTH_KEY);
+    if (stored) {
       return JSON.parse(stored);
-    } catch {
-      // Fall through to reset
     }
+  } catch (e) {
+    console.error('Failed to load auth from storage:', e);
   }
-  // Return products with empty reviews (rating 0, count 0)
-  return initialProducts.map(p => ({ ...p, rating: 0, reviewCount: 0 }));
+  return { token: null, user: null };
 };
 
-const loadFromStorage = (): Partial<AppState> => {
+const saveAuthToStorage = (token: string | null, user: User | null) => {
+  try {
+    if (token && user) {
+      localStorage.setItem(AUTH_KEY, JSON.stringify({ token, user }));
+    } else {
+      localStorage.removeItem(AUTH_KEY);
+    }
+  } catch (e) {
+    console.error('Failed to save auth:', e);
+  }
+};
+
+const loadSettingsFromStorage = (): Partial<AppState> => {
   try {
     const stored = localStorage.getItem(STORAGE_KEY);
     if (stored) {
@@ -153,43 +135,23 @@ const loadFromStorage = (): Partial<AppState> => {
         theme: parsed.theme || 'dark',
         language: parsed.language || 'ru',
         currency: parsed.currency || 'BYN',
-        user: parsed.user || null,
-        isAdmin: parsed.isAdmin || false,
-        cart: parsed.cart || [],
-        favorites: parsed.favorites || [],
-        priceAlerts: parsed.priceAlerts || [],
-        orders: parsed.orders || [],
-        reviews: parsed.reviews || [],
-        mailbox: parsed.mailbox || [],
-        unreadMail: parsed.unreadMail || 0,
       };
     }
   } catch (e) {
-    console.error('Failed to load state from storage:', e);
+    console.error('Failed to load settings:', e);
   }
   return {};
 };
 
-const saveToStorage = (state: AppState) => {
+const saveSettingsToStorage = (state: AppState) => {
   try {
-    const toSave = {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({
       theme: state.theme,
       language: state.language,
       currency: state.currency,
-      user: state.user,
-      isAdmin: state.isAdmin,
-      cart: state.cart,
-      favorites: state.favorites,
-      priceAlerts: state.priceAlerts,
-      orders: state.orders,
-      reviews: state.reviews,
-      mailbox: state.mailbox,
-      unreadMail: state.unreadMail,
-    };
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(toSave));
-    localStorage.setItem(PRODUCTS_KEY, JSON.stringify(state.products));
+    }));
   } catch (e) {
-    console.error('Failed to save state to storage:', e);
+    console.error('Failed to save settings:', e);
   }
 };
 
@@ -197,13 +159,12 @@ const initialState: AppState = {
   theme: 'dark',
   language: 'ru',
   currency: 'BYN',
-  products: getInitialProducts(),
-  reviews: [],
+  products: [],
+  reviews: {},
   cart: [],
   favorites: [],
   priceAlerts: [],
   orders: [],
-  mailbox: [],
   toasts: [],
   cartOpen: false,
   assistantOpen: false,
@@ -215,20 +176,32 @@ const initialState: AppState = {
   favoritesOpen: false,
   user: null,
   isAdmin: false,
-  unreadMail: 0,
+  token: null,
+  loading: true,
 };
 
 function reducer(state: AppState, action: Action): AppState {
   switch (action.type) {
-    case 'LOAD_STATE':
-      return { ...state, ...action.payload };
     case 'SET_THEME': return { ...state, theme: action.payload };
     case 'SET_LANGUAGE': return { ...state, language: action.payload };
     case 'SET_CURRENCY': return { ...state, currency: action.payload };
-    case 'LOGIN_USER': return { ...state, user: action.payload, isAdmin: false, authModalOpen: false };
-    case 'LOGIN_ADMIN': return { ...state, isAdmin: true, adminModalOpen: false, user: { name: 'Admin', email: 'admin@weezly.com' } };
-    case 'LOGOUT': return { ...state, user: null, isAdmin: false, cart: [], priceAlerts: [], favorites: [] };
+    case 'LOGIN_USER': return {
+      ...state,
+      user: action.payload.user,
+      token: action.payload.token,
+      isAdmin: action.payload.user.role === 'admin',
+      authModalOpen: false,
+    };
+    case 'LOGIN_ADMIN': return {
+      ...state,
+      user: action.payload.user,
+      token: action.payload.token,
+      isAdmin: true,
+      adminModalOpen: false,
+    };
+    case 'LOGOUT': return { ...state, user: null, isAdmin: false, token: null, cart: [], favorites: [], priceAlerts: [], orders: [] };
     case 'UPDATE_USER': return { ...state, user: state.user ? { ...state.user, ...action.payload } : null };
+    case 'SET_TOKEN': return { ...state, token: action.payload };
     case 'ADD_TO_CART': {
       const { product, warrantyLevel = 'none' } = action.payload;
       const existing = state.cart.find(i => i.product.id === product.id);
@@ -271,88 +244,29 @@ function reducer(state: AppState, action: Action): AppState {
     case 'SET_MAILBOX_OPEN': return { ...state, mailboxOpen: action.payload };
     case 'SET_PROFILE_OPEN': return { ...state, profileOpen: action.payload };
     case 'SET_FAVORITES_OPEN': return { ...state, favoritesOpen: action.payload };
-    case 'ADD_PRICE_ALERT':
-      return {
-        ...state,
-        priceAlerts: [
-          ...state.priceAlerts.filter(a => a.productId !== action.payload.productId),
-          action.payload,
-        ],
-      };
-    case 'REMOVE_PRICE_ALERT':
-      return { ...state, priceAlerts: state.priceAlerts.filter(a => a.productId !== action.payload) };
+    case 'SET_PRODUCTS': return { ...state, products: action.payload };
+    case 'SET_FAVORITES': return { ...state, favorites: action.payload };
+    case 'ADD_FAVORITE': return { ...state, favorites: [...state.favorites, action.payload] };
+    case 'REMOVE_FAVORITE': return { ...state, favorites: state.favorites.filter(id => id !== action.payload) };
+    case 'SET_ORDERS': return { ...state, orders: action.payload };
+    case 'ADD_ORDER': return { ...state, orders: [action.payload, ...state.orders] };
+    case 'SET_REVIEWS': return { ...state, reviews: { ...state.reviews, [action.payload.productId]: action.payload.reviews } };
+    case 'SET_PRICE_ALERTS': return { ...state, priceAlerts: action.payload };
     case 'UPDATE_PRODUCT_PRICE':
       return {
         ...state,
         products: state.products.map(p =>
           p.id === action.payload.productId
-            ? { ...p, price: action.payload.newPrice, discount: action.payload.discount, originalPrice: action.payload.discount > 0 ? p.originalPrice ?? p.price : undefined }
+            ? { ...p, price: action.payload.newPrice, discount: action.payload.discount, originalPrice: action.payload.discount > 0 ? p.price : p.originalPrice }
             : p
         ),
-        cart: state.cart.map(i =>
-          i.product.id === action.payload.productId
-            ? { ...i, product: { ...i.product, price: action.payload.newPrice, discount: action.payload.discount } }
-            : i
-        ),
-      };
-    case 'UPDATE_PRODUCT':
-      return {
-        ...state,
-        products: state.products.map(p => p.id === action.payload.id ? action.payload : p),
-      };
-    case 'ADD_PRODUCT':
-      return { ...state, products: [...state.products, action.payload] };
-    case 'DELETE_PRODUCT':
-      return { ...state, products: state.products.filter(p => p.id !== action.payload) };
-    case 'ADD_ORDER':
-      return { ...state, orders: [action.payload, ...state.orders] };
-    case 'ADD_REVIEW': {
-      const newReview = action.payload;
-      const productReviews = [...state.reviews.filter(r => r.productId === newReview.productId), newReview];
-      const avgRating = productReviews.reduce((sum, r) => sum + r.rating, 0) / productReviews.length;
-      return {
-        ...state,
-        reviews: [...state.reviews.filter(r => r.productId !== newReview.productId), newReview],
-        products: state.products.map(p =>
-          p.id === newReview.productId
-            ? { ...p, rating: Math.round(avgRating * 10) / 10, reviewCount: productReviews.length }
-            : p
-        ),
-      };
-    }
-    case 'ADD_MAIL':
-      return {
-        ...state,
-        mailbox: [action.payload, ...state.mailbox],
-        unreadMail: state.unreadMail + 1,
-      };
-    case 'MARK_MAIL_READ':
-      return {
-        ...state,
-        mailbox: state.mailbox.map(m => m.id === action.payload ? { ...m, read: true } : m),
-        unreadMail: Math.max(0, state.unreadMail - (state.mailbox.find(m => m.id === action.payload && !m.read) ? 1 : 0)),
       };
     case 'ADD_TOAST':
       return { ...state, toasts: [...state.toasts, action.payload] };
     case 'REMOVE_TOAST':
       return { ...state, toasts: state.toasts.filter(t => t.id !== action.payload) };
-    case 'TRIGGER_ALERT':
-      return {
-        ...state,
-        priceAlerts: state.priceAlerts.map(a =>
-          a.productId === action.payload ? { ...a, triggered: true } : a
-        ),
-      };
-    case 'TOGGLE_FAVORITE': {
-      const productId = action.payload;
-      const isFavorite = state.favorites.includes(productId);
-      return {
-        ...state,
-        favorites: isFavorite
-          ? state.favorites.filter(id => id !== productId)
-          : [...state.favorites, productId],
-      };
-    }
+    case 'SET_LOADING':
+      return { ...state, loading: action.payload };
     default:
       return state;
   }
@@ -367,6 +281,15 @@ interface AppContextType {
   cartTotal: number;
   cartCount: number;
   isLoggedIn: boolean;
+  loginUser: (email: string, password: string) => Promise<{ success: boolean; error?: string }>;
+  registerUser: (email: string, password: string, name: string) => Promise<{ success: boolean; error?: string }>;
+  loginAdmin: (username: string, password: string) => Promise<{ success: boolean; error?: string }>;
+  logout: () => void;
+  toggleFavorite: (productId: number) => Promise<void>;
+  addReview: (productId: number, rating: number, comment: string) => Promise<void>;
+  fetchProducts: () => Promise<void>;
+  fetchOrders: () => Promise<void>;
+  submitOrder: (orderData: any) => Promise<string | null>;
 }
 
 const AppContext = createContext<AppContextType | null>(null);
@@ -374,18 +297,120 @@ const AppContext = createContext<AppContextType | null>(null);
 export function AppProvider({ children }: { children: React.ReactNode }) {
   const [state, dispatch] = useReducer(reducer, initialState);
 
-  // Load state from localStorage on mount
+  // Load settings from storage
   useEffect(() => {
-    const savedState = loadFromStorage();
-    if (Object.keys(savedState).length > 0) {
-      dispatch({ type: 'LOAD_STATE', payload: savedState });
+    const settings = loadSettingsFromStorage();
+    if (settings.theme) dispatch({ type: 'SET_THEME', payload: settings.theme });
+    if (settings.language) dispatch({ type: 'SET_LANGUAGE', payload: settings.language });
+    if (settings.currency) dispatch({ type: 'SET_CURRENCY', payload: settings.currency });
+  }, []);
+
+  // Save settings on change
+  useEffect(() => {
+    saveSettingsToStorage(state);
+  }, [state.theme, state.language, state.currency]);
+
+  // Check for existing auth token and validate
+  useEffect(() => {
+    const initAuth = async () => {
+      const { token, user } = loadAuthFromStorage();
+      if (token) {
+        dispatch({ type: 'SET_TOKEN', payload: token });
+        const result = await getCurrentUser();
+        if (result.success && result.user) {
+          dispatch({
+            type: 'LOGIN_USER',
+            payload: { user: result.user as User, token },
+          });
+          // Fetch user data
+          await fetchFavorites();
+          await fetchOrders();
+          await fetchPriceAlerts();
+        } else {
+          saveAuthToStorage(null, null);
+        }
+      }
+      dispatch({ type: 'SET_LOADING', payload: false });
+    };
+
+    // Load products
+    fetchProducts();
+    initAuth();
+  }, []);
+
+  const fetchProducts = useCallback(async () => {
+    const result = await getProducts();
+    if (result.success && result.products) {
+      dispatch({ type: 'SET_PRODUCTS', payload: result.products.map(p => ({
+        id: p.id,
+        nameRu: p.name_ru,
+        nameBe: p.name_be,
+        nameEn: p.name_en,
+        descRu: p.desc_ru,
+        descBe: p.desc_be,
+        descEn: p.desc_en,
+        price: p.price,
+        originalPrice: p.original_price,
+        category: p.category as any,
+        brand: p.brand,
+        rating: p.rating,
+        reviewCount: p.review_count,
+        stock: p.stock,
+        image: p.image,
+        tags: p.tags,
+        specs: p.specs,
+        mtbf: p.mtbf,
+        discount: p.discount,
+      })) as Product[] });
     }
   }, []);
 
-  // Save state to localStorage on changes
-  useEffect(() => {
-    saveToStorage(state);
-  }, [state.theme, state.language, state.currency, state.user, state.isAdmin, state.cart, state.favorites, state.priceAlerts, state.orders, state.reviews, state.mailbox, state.unreadMail, state.products]);
+  const fetchFavorites = useCallback(async () => {
+    const result = await getFavorites();
+    if (result.success && result.favoriteIds) {
+      dispatch({ type: 'SET_FAVORITES', payload: result.favoriteIds });
+    }
+  }, []);
+
+  const fetchOrders = useCallback(async () => {
+    const result = await getOrders();
+    if (result.success && result.orders) {
+      const orders: Order[] = result.orders.map(o => ({
+        id: o.id,
+        items: o.order_items.map(oi => ({
+          product: { id: oi.product_id, price: oi.price } as any,
+          quantity: oi.quantity,
+          warrantyLevel: oi.warranty_level as WarrantyLevel,
+        })),
+        total: o.total,
+        currency: o.currency as Currency,
+        date: o.created_at,
+        status: o.status as any,
+        address: {
+          firstName: o.first_name,
+          lastName: o.last_name,
+          email: o.email,
+          phone: o.phone || '',
+          address: o.address,
+          city: o.city,
+          zipCode: o.zip_code || '',
+          country: o.country,
+        },
+      }));
+      dispatch({ type: 'SET_ORDERS', payload: orders });
+    }
+  }, []);
+
+  const fetchPriceAlerts = useCallback(async () => {
+    const result = await getPriceAlerts();
+    if (result.success && result.alerts) {
+      dispatch({ type: 'SET_PRICE_ALERTS', payload: result.alerts.map(a => ({
+        productId: a.product_id,
+        targetPrice: a.target_price,
+        triggered: a.triggered,
+      })) });
+    }
+  }, []);
 
   const t = useCallback((key: keyof typeof translations.en): string => {
     return (translations[state.language] as Record<string, string>)[key] ?? translations.en[key] ?? key;
@@ -410,82 +435,93 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const cartCount = state.cart.reduce((sum, item) => sum + item.quantity, 0);
   const isLoggedIn = state.user !== null;
 
-  // Price simulator
-  const alertsRef = useRef(state.priceAlerts);
-  const productsRef = useRef(state.products);
-  const currentUserRef = useRef(state.user);
-  alertsRef.current = state.priceAlerts;
-  productsRef.current = state.products;
-  currentUserRef.current = state.user;
+  const loginUser = useCallback(async (email: string, password: string) => {
+    const result = await apiLogin(email, password);
+    if (result.success && result.user && result.token) {
+      dispatch({ type: 'LOGIN_USER', payload: { user: result.user, token: result.token } });
+      saveAuthToStorage(result.token, result.user);
+      await fetchFavorites();
+      await fetchOrders();
+      await fetchPriceAlerts();
+      return { success: true };
+    }
+    return { success: false, error: result.error || 'Login failed' };
+  }, []);
 
+  const registerUser = useCallback(async (email: string, password: string, name: string) => {
+    const result = await apiRegister(email, password, name);
+    if (result.success && result.user && result.token) {
+      dispatch({ type: 'LOGIN_USER', payload: { user: result.user, token: result.token } });
+      saveAuthToStorage(result.token, result.user);
+      return { success: true };
+    }
+    return { success: false, error: result.error || 'Registration failed' };
+  }, []);
+
+  const loginAdmin = useCallback(async (username: string, password: string) => {
+    const result = await apiAdminLogin(username, password);
+    if (result.success && result.user && result.token) {
+      dispatch({ type: 'LOGIN_ADMIN', payload: { user: result.user, token: result.token } });
+      saveAuthToStorage(result.token, result.user);
+      return { success: true };
+    }
+    return { success: false, error: result.error || 'Admin login failed' };
+  }, []);
+
+  const logout = useCallback(() => {
+    dispatch({ type: 'LOGOUT' });
+    saveAuthToStorage(null, null);
+  }, []);
+
+  const toggleFavorite = useCallback(async (productId: number) => {
+    if (!state.user) return;
+    const result = await apiToggleFavorite(productId);
+    if (result.success) {
+      if (result.action === 'added') {
+        dispatch({ type: 'ADD_FAVORITE', payload: productId });
+      } else {
+        dispatch({ type: 'REMOVE_FAVORITE', payload: productId });
+      }
+    }
+  }, [state.user]);
+
+  const addReview = useCallback(async (productId: number, rating: number, comment: string) => {
+    if (!state.user) return;
+    const result = await apiCreateReview(productId, rating, comment);
+    if (result.success) {
+      await fetchProducts(); // Refresh to get updated rating
+    }
+  }, [state.user]);
+
+  const submitOrder = useCallback(async (orderData: any): Promise<string | null> => {
+    const result = await apiCreateOrder(orderData);
+    if (result.success && result.orderId) {
+      await fetchOrders();
+      return result.orderId;
+    }
+    return null;
+  }, []);
+
+  // Price simulator (keeps running for demo)
   useEffect(() => {
     const interval = setInterval(() => {
-      const products = productsRef.current;
-      if (products.length === 0) return;
+      if (state.products.length === 0) return;
       const numSales = Math.floor(Math.random() * 3) + 1;
-      const shuffled = [...products].sort(() => Math.random() - 0.5).slice(0, numSales);
+      const shuffled = [...state.products].sort(() => Math.random() - 0.5).slice(0, numSales);
       shuffled.forEach(product => {
         const discountPct = Math.floor(Math.random() * 15) + 3;
         const newPrice = Math.round(product.price * (1 - discountPct / 100) * 100) / 100;
         dispatch({ type: 'UPDATE_PRODUCT_PRICE', payload: { productId: product.id, newPrice, discount: discountPct } });
-
-        const alerts = alertsRef.current;
-        const alert = alerts.find(a => a.productId === product.id && !a.triggered);
-        if (alert && newPrice <= alert.targetPrice) {
-          dispatch({ type: 'TRIGGER_ALERT', payload: product.id });
-          const toastId = `toast-${Date.now()}-${product.id}`;
-          dispatch({
-            type: 'ADD_TOAST',
-            payload: {
-              id: toastId,
-              title: state.language === 'ru' ? 'Цена снизилась!' : state.language === 'be' ? 'Цана знізілася!' : 'Price Dropped!',
-              message: `${product.nameRu} — ${state.currency === 'USD' ? `$${newPrice.toFixed(2)}` : `${(newPrice * USD_TO_BYN).toFixed(2)} BYN`}`,
-              type: 'success',
-              productId: product.id,
-            },
-          });
-          dispatch({
-            type: 'ADD_MAIL',
-            payload: {
-              id: `mail-${Date.now()}-${product.id}`,
-              subject: state.language === 'ru' ? 'Цена снижена! Специальное предложение' : state.language === 'be' ? 'Цана знізілася! Спецыяльная прапанова' : 'Price Drop! Special Offer',
-              from: 'WEEZLY Platform <noreply@weezly.com>',
-              body: state.language === 'ru'
-                ? `Уважаемый пользователь,\n\nВы отслеживали товар "${product.nameRu}".\n\nЦена снизилась до ${state.currency === 'USD' ? `$${newPrice.toFixed(2)}` : `${(newPrice * USD_TO_BYN).toFixed(2)} BYN`} (скидка ${discountPct}%).\n\nНажмите кнопку ниже, чтобы перейти к покупке.\n\nС уважением,\nКоманда WEEZLY`
-                : state.language === 'be'
-                ? `Шаноўны карыстальнік,\n\nВы адсочвалі тавар "${product.nameBe}".\n\nЦана знізілася да ${state.currency === 'USD' ? `$${newPrice.toFixed(2)}` : `${(newPrice * USD_TO_BYN).toFixed(2)} BYN`} (зніжка ${discountPct}%).\n\nНацісніце кнопку ніжэй, каб перайсці да пакупкі.\n\nЗ павагай,\nКаманда WEEZLY`
-                : `Dear Customer,\n\nYou were tracking "${product.nameEn}".\n\nPrice dropped to ${state.currency === 'USD' ? `$${newPrice.toFixed(2)}` : `${(newPrice * USD_TO_BYN).toFixed(2)} BYN`} (${discountPct}% off).\n\nClick the button below to proceed with purchase.\n\nBest regards,\nWEEZLY Team`,
-              date: new Date().toISOString(),
-              productId: product.id,
-              read: false,
-            },
-          });
-
-          const userRef = currentUserRef.current;
-          if (userRef?.email) {
-            sendEmail({
-              to: userRef.email,
-              type: 'priceDrop',
-              language: state.language,
-              data: {
-                productName: state.language === 'ru' ? product.nameRu : state.language === 'be' ? product.nameBe : product.nameEn,
-                oldPrice: state.currency === 'USD' ? `$${(product.originalPrice || product.price).toFixed(2)}` : `${((product.originalPrice || product.price) * USD_TO_BYN).toFixed(2)} BYN`,
-                newPrice: state.currency === 'USD' ? `$${newPrice.toFixed(2)}` : `${(newPrice * USD_TO_BYN).toFixed(2)} BYN`,
-                discount: discountPct,
-                productUrl: `${window.location.origin}/product/${product.id}`,
-              },
-            }).catch(err => console.error('Failed to send price drop email:', err));
-          }
-
-          setTimeout(() => dispatch({ type: 'REMOVE_TOAST', payload: toastId }), 6000);
-        }
       });
-    }, 35000);
+    }, 45000);
     return () => clearInterval(interval);
-  }, [state.currency, state.language]);
+  }, [state.products]);
 
   return (
-    <AppContext.Provider value={{ state, dispatch, t, formatPrice, convertPrice, cartTotal, cartCount, isLoggedIn }}>
+    <AppContext.Provider value={{
+      state, dispatch, t, formatPrice, convertPrice, cartTotal, cartCount, isLoggedIn,
+      loginUser, registerUser, loginAdmin, logout, toggleFavorite, addReview, fetchProducts, fetchOrders, submitOrder
+    }}>
       {children}
     </AppContext.Provider>
   );
